@@ -5,6 +5,7 @@ const dotenv = require('dotenv');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 // Load env vars
 dotenv.config();
+const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -42,7 +43,7 @@ async function run() {
     });
 
     // Get all parcels
-    
+
     app.get('/parcels', async (req, res) => {
       try {
         const userEmail = req.query.email;
@@ -62,15 +63,30 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await ParcelCollection.findOne(query);
       res.send(result);
-    })
+    });
     // Delete A parcel
     app.delete('/parcels/:id', async (req, res) => {
-        const id=req.params.id;
-        console.log(id);
-        const query={_id:new ObjectId(id)};
-        const result=await ParcelCollection.deleteOne(query);
-        res.send(result);
-    })
+      const id = req.params.id;
+      console.log(id);
+      const query = { _id: new ObjectId(id) };
+      const result = await ParcelCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // Stripe
+    app.post('/create-payment-intent', async (req, res) => {
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: 1000, // amount in cents
+          currency: 'usd',
+          payment_method_types: ['card'],
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db('admin').command({ ping: 1 });
