@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const admin = require("firebase-admin");
 // Load env vars
 dotenv.config();
 const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
@@ -14,6 +15,13 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+
+// Firebase
+const serviceAccount = require("./firebase-admin-key.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 // MongoDB
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.zsjpk5h.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -36,13 +44,26 @@ async function run() {
     const ParcelCollection = db.collection('parcels');
     const paymentsCollection = db.collection('payments');
     const usersCollection = db.collection('users');
-
+// Custom MIddleware
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if(!authHeader){
+    return res.status(401).send({message:'Unauthorized access'})
+  }
+  const token=authHeader.split(' ')[1];
+  if(!token){
+    return res.status(401).send({message:'Unauthorized access'})
+  }
+ 
+  next();
+}
     //User RElated Apis:
     app.post('/users', async (req, res) => {
       const email = req.body.email;
       const user = req.body;
       const userExists = await usersCollection.findOne({ email: email });
       if (userExists) {
+        // update last log in info
         return res
           .status(200)
           .send({ message: 'User Already Exists', inserted: false });
@@ -145,7 +166,7 @@ async function run() {
     });
 
     // GET:Get Payments
-    app.get('/payments', async (req, res) => {
+    app.get('/payments',verifyFirebaseToken, async (req, res) => {
       try {
         const userEmail = req.query.email;
         const query = userEmail ? { email: userEmail } : {};
