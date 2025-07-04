@@ -44,6 +44,7 @@ async function run() {
     const paymentsCollection = db.collection('payments');
     const usersCollection = db.collection('users');
     const warehousesCollection = db.collection('warehouse');
+    const ridersCollection = db.collection('riders');
     // Custom MIddleware
     const verifyFirebaseToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -63,6 +64,69 @@ async function run() {
         return res.status(403).send({ message: 'forbidden access' });
       }
     };
+    // Rider Related Apis:
+    app.post('/riders', async (req, res) => {
+      const email = req.body.email;
+      const user = req.body;
+      // const userExists = await ridersCollection.findOne({ email: email });
+      // if (userExists) {
+      //   // update last log in info
+      //   return res
+      //     .status(200)
+      //     .send({ message: 'User Already Exists', inserted: false });
+      // }
+      const result = await ridersCollection.insertOne(user);
+      res.send(result);
+    });
+    app.get('/riders/pending', async (req, res) => {
+      try {
+        const result = await ridersCollection
+          .find({ status: 'pending' })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+    app.get('/riders/active', async (req, res) => {
+      try {
+        const result = await ridersCollection
+          .find({ status: 'active' })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+    app.patch('/riders/:id', async (req, res) => {
+      const id = req.params.id;
+      const { status, email } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { status: status },
+      };
+      try {
+        const result = await ridersCollection.updateOne(query, updateDoc);
+
+        //  update user role for accepting rider
+        if (status === 'active') {
+          const userQuery = { email };
+          const userUpdateDoc = {
+            $set: { role: 'rider' },
+          };
+          const roleResult = await usersCollection.updateOne(
+            userQuery,
+            userUpdateDoc
+          );
+          console.log(roleResult.matchedCount);
+        }
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
     //User RElated Apis:
     app.post('/users', async (req, res) => {
       const email = req.body.email;
@@ -76,6 +140,47 @@ async function run() {
       }
       const result = await usersCollection.insertOne(user);
       res.send(result);
+    });
+
+    app.get('/users/search', async (req, res) => {
+      const emailQuery = req.query.email;
+      if (!emailQuery) {
+        return res.status(400).send({ message: 'Missing email query' });
+      }
+
+      const regex = new RegExp(emailQuery, 'i'); // case-insensitive partial match
+
+      try {
+        const users = await usersCollection
+          .find({ email: { $regex: regex } })
+          // .project({ email: 1, createdAt: 1, role: 1 })
+          .limit(10)
+          .toArray();
+        res.send(users);
+      } catch (error) {
+        console.error('Error searching users', error);
+        res.status(500).send({ message: 'Error searching users' });
+      }
+    });
+
+    app.patch('/users/:id/role', async (req, res) => {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      if (!['admin', 'user'].includes(role)) {
+        return res.status(400).send({ message: 'Invalid role' });
+      }
+
+      try {
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+        res.send({ message: `User role updated to ${role}`, result });
+      } catch (error) {
+        console.error('Error updating user role', error);
+        res.status(500).send({ message: 'Failed to update user role' });
+      }
     });
 
     // Create a new parcel
@@ -178,9 +283,9 @@ async function run() {
     app.get('/payments', verifyFirebaseToken, async (req, res) => {
       try {
         const userEmail = req.query.email;
-        
-        if(req.decoded.email!==userEmail){
-          return res.status(403).send({message:'forbidden access'})
+
+        if (req.decoded.email !== userEmail) {
+          return res.status(403).send({ message: 'forbidden access' });
         }
         const query = userEmail ? { email: userEmail } : {};
         const options = {
