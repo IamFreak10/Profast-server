@@ -64,6 +64,15 @@ async function run() {
         return res.status(403).send({ message: 'forbidden access' });
       }
     };
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== 'admin') {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+      next();
+    };
     // Rider Related Apis:
     app.post('/riders', async (req, res) => {
       const email = req.body.email;
@@ -78,54 +87,69 @@ async function run() {
       const result = await ridersCollection.insertOne(user);
       res.send(result);
     });
-    app.get('/riders/pending', async (req, res) => {
-      try {
-        const result = await ridersCollection
-          .find({ status: 'pending' })
-          .toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: error.message });
-      }
-    });
-    app.get('/riders/active', async (req, res) => {
-      try {
-        const result = await ridersCollection
-          .find({ status: 'active' })
-          .toArray();
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: error.message });
-      }
-    });
-    app.patch('/riders/:id', async (req, res) => {
-      const id = req.params.id;
-      const { status, email } = req.body;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: { status: status },
-      };
-      try {
-        const result = await ridersCollection.updateOne(query, updateDoc);
-
-        //  update user role for accepting rider
-        if (status === 'active') {
-          const userQuery = { email };
-          const userUpdateDoc = {
-            $set: { role: 'rider' },
-          };
-          const roleResult = await usersCollection.updateOne(
-            userQuery,
-            userUpdateDoc
-          );
-          console.log(roleResult.matchedCount);
+    app.get(
+      '/riders/pending',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const result = await ridersCollection
+            .find({ status: 'pending' })
+            .toArray();
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: error.message });
         }
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: error.message });
       }
-    });
+    );
+    app.get(
+      '/riders/active',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const result = await ridersCollection
+            .find({ status: 'active' })
+            .toArray();
+
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: error.message });
+        }
+      }
+    );
+    app.patch(
+      '/riders/:id',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status, email } = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: { status: status },
+        };
+        try {
+          const result = await ridersCollection.updateOne(query, updateDoc);
+
+          //  update user role for accepting rider
+          if (status === 'active') {
+            const userQuery = { email };
+            const userUpdateDoc = {
+              $set: { role: 'rider' },
+            };
+            const roleResult = await usersCollection.updateOne(
+              userQuery,
+              userUpdateDoc
+            );
+            console.log(roleResult.matchedCount);
+          }
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: error.message });
+        }
+      }
+    );
 
     //User RElated Apis:
     app.post('/users', async (req, res) => {
@@ -163,25 +187,30 @@ async function run() {
       }
     });
 
-    app.patch('/users/:id/role', async (req, res) => {
-      const { id } = req.params;
-      const { role } = req.body;
+    app.patch(
+      '/users/:id/role',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { role } = req.body;
 
-      if (!['admin', 'user'].includes(role)) {
-        return res.status(400).send({ message: 'Invalid role' });
-      }
+        if (!['admin', 'user'].includes(role)) {
+          return res.status(400).send({ message: 'Invalid role' });
+        }
 
-      try {
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role } }
-        );
-        res.send({ message: `User role updated to ${role}`, result });
-      } catch (error) {
-        console.error('Error updating user role', error);
-        res.status(500).send({ message: 'Failed to update user role' });
+        try {
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { role } }
+          );
+          res.send({ message: `User role updated to ${role}`, result });
+        } catch (error) {
+          console.error('Error updating user role', error);
+          res.status(500).send({ message: 'Failed to update user role' });
+        }
       }
-    });
+    );
 
     // Create a new parcel
     app.post('/parcels', async (req, res) => {
@@ -192,37 +221,78 @@ async function run() {
 
     // Get all parcels
 
-    app.get('/parcels', verifyFirebaseToken, async (req, res) => {
+    app.get('/parcels', async (req, res) => {
       try {
-        const userEmail = req.query.email;
-        if (req.decoded.email !== userEmail) {
-          return res.status(403).send({ message: 'forbidden access' });
+        const { email, payment_status, delivery_status } = req.query;
+        let query = {};
+        if (email) {
+          query = { created_by: email };
         }
-        const query = userEmail ? { created_by: userEmail } : {};
-        const options = {
-          sort: { createdAT: -1 },
-        };
-        const result = await ParcelCollection.find(query, options).toArray();
-        res.send(result);
+        if (payment_status) {
+          query.payment_status = payment_status;
+        }
+        if (delivery_status) {
+          query.delivery_status = delivery_status;
+        }
+
+        console.log('Parcel Quer:', req.query, query);
+        const parcels = await ParcelCollection.find(query)
+          .sort({ createdAT: -1 })
+          .toArray();
+        res.send(parcels);
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
     });
     // Get a single parcel
-    app.get('/parcels/:id', async (req, res) => {
+    app.get('/parcels/:id', verifyFirebaseToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await ParcelCollection.findOne(query);
       res.send(result);
     });
     // Delete A parcel
-    app.delete('/parcels/:id', async (req, res) => {
+    app.delete('/parcels/:id', verifyFirebaseToken, async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const query = { _id: new ObjectId(id) };
       const result = await ParcelCollection.deleteOne(query);
       res.send(result);
     });
+    // patch parcel
+    app.patch(
+      '/parcels/:id',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const {
+          delivery_status,
+          assigned_rider_email,
+          assigned_rider_id,
+          // assigned_at,
+        } = req.body;
+
+        const updateDoc = {
+          $set: {
+            delivery_status,
+            assigned_rider_email,
+            assigned_rider_id: new ObjectId(assigned_rider_id),
+            // assigned_at: assigned_at || new Date(),
+          },
+        };
+
+        try {
+          const result = await ParcelCollection.updateOne(
+            { _id: new ObjectId(id) },
+            updateDoc
+          );
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: error.message });
+        }
+      }
+    );
 
     // Stripe
     app.post('/create-payment-intent', async (req, res) => {
@@ -241,7 +311,7 @@ async function run() {
     });
 
     // POST: Record payment and update parcel status
-    app.post('/payments', async (req, res) => {
+    app.post('/payments', verifyFirebaseToken, async (req, res) => {
       const { id, email, amount, paymentMethod, transactionId } = req.body;
 
       try {
@@ -276,6 +346,28 @@ async function run() {
       } catch (error) {
         console.error('Payment processing failed:', error);
         res.status(500).send({ message: 'Failed to record payment' });
+      }
+    });
+
+    // GET: Get user role by email
+    app.get('/users/:email/role', async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        if (!email) {
+          return res.status(400).send({ message: 'Email is required' });
+        }
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).send({ message: 'User not found' });
+        }
+
+        res.send({ role: user.role || 'user' });
+      } catch (error) {
+        console.error('Error getting user role:', error);
+        res.status(500).send({ message: 'Failed to get role' });
       }
     });
 
