@@ -268,16 +268,21 @@ async function run() {
         const id = req.params.id;
         const {
           delivery_status,
+          assigned_rider,
           assigned_rider_email,
-          assigned_rider_id,
+          assigned_rider_phone,
+          assigned_rider_name,
           // assigned_at,
         } = req.body;
 
         const updateDoc = {
           $set: {
             delivery_status,
+            assigned_rider_name,
+            assigned_rider_id: new ObjectId(assigned_rider),
             assigned_rider_email,
-            assigned_rider_id: new ObjectId(assigned_rider_id),
+            assigned_rider_phone,
+
             // assigned_at: assigned_at || new Date(),
           },
         };
@@ -293,10 +298,37 @@ async function run() {
         }
       }
     );
+    // Riders Personal
+    app.get('/rider/parcels', async (req, res) => {
+      try {
+        const { email } = req.query;
+
+        if (!email) {
+          return res.status(400).json({ message: 'Rider email is required' });
+        }
+
+        const query = {
+          assigned_rider_email: email,
+          delivery_status: { $in: ['rider_assigned', 'on_transit'] },
+        };
+
+        const options = {
+          sort: { creation_date: -1 },
+        };
+
+        const parcels = await ParcelCollection.find(query, options).toArray();
+
+        res.send(parcels);
+      } catch (error) {
+        console.error('Error fetching rider parcels:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
 
     // Stripe
     app.post('/create-payment-intent', async (req, res) => {
       const amountInCents = req.body.amountInCents;
+      console.log(amountInCents);
       try {
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountInCents, // amount in cents
@@ -306,7 +338,7 @@ async function run() {
 
         res.json({ clientSecret: paymentIntent.client_secret });
       } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.log(error);
       }
     });
 
