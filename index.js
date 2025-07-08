@@ -45,6 +45,7 @@ async function run() {
     const usersCollection = db.collection('users');
     const warehousesCollection = db.collection('warehouse');
     const ridersCollection = db.collection('riders');
+    const parcelTrackingCollection = db.collection('parcelTracking');
     // Custom MIddleware
     const verifyFirebaseToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -73,6 +74,17 @@ async function run() {
       }
       next();
     };
+
+    const verifyRider = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== 'rider') {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+      next();
+    };
+
     // Rider Related Apis:
     app.post('/riders', async (req, res) => {
       const email = req.body.email;
@@ -142,7 +154,6 @@ async function run() {
               userQuery,
               userUpdateDoc
             );
-            console.log(roleResult.matchedCount);
           }
           res.send(result);
         } catch (error) {
@@ -213,6 +224,13 @@ async function run() {
     );
 
     // Create a new parcel
+
+    // Parcel Tracking
+    app.post('/parcels/track', async (req, res) => {
+      const trackingInfo = req.body;
+      const result = await parcelTrackingCollection.insertOne(trackingInfo);
+      res.send(result);
+    });
     app.post('/parcels', async (req, res) => {
       const newparcel = req.body;
       const result = await ParcelCollection.insertOne(newparcel);
@@ -235,7 +253,6 @@ async function run() {
           query.delivery_status = delivery_status;
         }
 
-        console.log('Parcel Quer:', req.query, query);
         const parcels = await ParcelCollection.find(query)
           .sort({ createdAT: -1 })
           .toArray();
@@ -254,7 +271,7 @@ async function run() {
     // Delete A parcel
     app.delete('/parcels/:id', verifyFirebaseToken, async (req, res) => {
       const id = req.params.id;
-      console.log(id);
+
       const query = { _id: new ObjectId(id) };
       const result = await ParcelCollection.deleteOne(query);
       res.send(result);
@@ -299,6 +316,32 @@ async function run() {
       }
     );
     // Riders Personal
+    app.get('/rider/completed-parcels', async (req, res) => {
+      try {
+        const { email } = req.query;
+
+        if (!email) {
+          return res.status(400).json({ message: 'Rider email is required' });
+        }
+
+        const query = {
+          assigned_rider_email: email,
+          delivery_status: { $in: ['delivered', 'service_center_delivered'] },
+        };
+
+        const options = {
+          sort: { creation_date: -1 },
+        };
+
+        const parcels = await ParcelCollection.find(query, options).toArray();
+
+        res.send(parcels);
+      } catch (error) {
+        console.error('Error fetching completed parcels:', error);
+        res.status(500).json({ message: 'Internal server error' });
+      }
+    });
+
     app.get('/rider/parcels', async (req, res) => {
       try {
         const { email } = req.query;
@@ -324,11 +367,88 @@ async function run() {
         res.status(500).json({ message: 'Internal server error' });
       }
     });
+    // rider cashout
+
+    app.patch('/parcels/:id/cashout', verifyFirebaseToken, async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await ParcelCollection.updateOne(
+          { _id: new ObjectId(id), cashout_status: { $ne: 'cashed_out' } }, // শুধু না-হওয়া গুলো আপডেট হবে
+          { $set: { cashout_status: 'cashed_out', cashout_date: new Date() } }
+        );
+        if (result.modifiedCount === 0) {
+          return res
+            .status(400)
+            .send({ message: 'Already cashed out or parcel not found' });
+        }
+        res.send({ success: true, message: 'Cashout successful' });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: 'Cashout failed' });
+      }
+    });
+
+    app.get('/riders-completed-deliveris', async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).json({ message: 'Rider email is required' });
+      }
+      const query = {
+        assigned_rider_email: email,
+        delivery_status: { $in: ['delivered', 'service_center_delivered'] },
+      };
+      const options = {
+        sort: { creation_date: -1 },
+      };
+      const parcels = await ParcelCollection.find(query, options).toArray();
+      res.send(parcels);
+    });
+
+    app.patch('/rider/parcels/:id', verifyFirebaseToken, async (req, res) => {
+      const id = req.params.id;
+      const { delivery_status } = req.body;
+      const updateDoc = {
+        delivery_status,
+      };
+      if (delivery_status === 'on_transit') {
+        updateDoc.picked_at = new Date();
+      } else if (delivery_status === 'delivered') {
+        updateDoc.delivered_at = new Date();
+      }
+      try {
+        const result = await ParcelCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              ...updateDoc,
+            },
+          }
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+    app.patch('/rider/status', verifyFirebaseToken, async (req, res) => {
+      const query = req.body?.rider_email;
+      try {
+        const result = await ridersCollection.updateOne(
+          { email: query },
+          {
+            $set: { status: 'active' },
+          }
+        );
+        console.log(result);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
 
     // Stripe
     app.post('/create-payment-intent', async (req, res) => {
       const amountInCents = req.body.amountInCents;
-      console.log(amountInCents);
+
       try {
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountInCents, // amount in cents
